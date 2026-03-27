@@ -14,6 +14,9 @@ service DaemonService {
   // Login uses setup key to prepare configuration for the daemon.
   rpc Login(LoginRequest) returns (LoginResponse) {}
 
+  // LoginWithJWTToken uses a user JWT token to register/login directly without SSO browser flow.
+  rpc LoginWithJWTToken(LoginWithJWTTokenRequest) returns (LoginResponse) {}
+
   // WaitSSOLogin uses the userCode to validate the TokenInfo and
   // waits for the user to continue with the login on a browser
   rpc WaitSSOLogin(WaitSSOLoginRequest) returns (WaitSSOLoginResponse) {}
@@ -216,6 +219,15 @@ message LoginResponse {
   string userCode = 2;
   string verificationURI = 3;
   string verificationURIComplete = 4;
+}
+
+message LoginWithJWTTokenRequest {
+  string jwtToken = 1;
+  string hostname = 2;
+  optional string profileName = 3;
+  optional string username = 4;
+  string managementUrl = 5;
+  string adminURL = 6;
 }
 
 message WaitSSOLoginRequest {

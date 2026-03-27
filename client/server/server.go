@@ -289,6 +289,81 @@ func (s *Server) loginAttempt(ctx context.Context, setupKey, jwtToken string) (i
 	return "", nil
 }
 
+func (s *Server) prepareLoginContext(callerCtx context.Context, profileName, username *string, hostname string) (context.Context, *profilemanager.ActiveProfileState, error) {
+	s.mutex.Lock()
+	if s.actCancel != nil {
+		s.actCancel()
+	}
+	ctx, cancel := context.WithCancel(callerCtx)
+
+	md, ok := metadata.FromIncomingContext(callerCtx)
+	if ok {
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+
+	s.actCancel = cancel
+	s.mutex.Unlock()
+
+	activeProf, err := s.profileManager.GetActiveProfileState()
+	if err != nil {
+		log.Errorf("failed to get active profile state: %v", err)
+		return nil, nil, fmt.Errorf("failed to get active profile state: %w", err)
+	}
+
+	if profileName != nil {
+		if *profileName != "default" && (username == nil || *username == "") {
+			log.Errorf("profile name is set to %s, but username is not provided", *profileName)
+			return nil, nil, fmt.Errorf("profile name is set to %s, but username is not provided", *profileName)
+		}
+
+		var profileUsername string
+		if *profileName != "default" {
+			profileUsername = *username
+		}
+
+		if *profileName != activeProf.Name && profileUsername != activeProf.Username {
+			if s.checkProfilesDisabled() {
+				log.Errorf("profiles are disabled, you cannot use this feature without profiles enabled")
+				return nil, nil, gstatus.Errorf(codes.Unavailable, errProfilesDisabled)
+			}
+
+			log.Infof("switching to profile %s for user '%s'", *profileName, profileUsername)
+			if err := s.profileManager.SetActiveProfileState(&profilemanager.ActiveProfileState{
+				Name:     *profileName,
+				Username: profileUsername,
+			}); err != nil {
+				log.Errorf("failed to set active profile state: %v", err)
+				return nil, nil, fmt.Errorf("failed to set active profile state: %w", err)
+			}
+		}
+	}
+
+	activeProf, err = s.profileManager.GetActiveProfileState()
+	if err != nil {
+		log.Errorf("failed to get active profile state: %v", err)
+		return nil, nil, fmt.Errorf("failed to get active profile state: %w", err)
+	}
+
+	log.Infof("active profile: %s for %s", activeProf.Name, activeProf.Username)
+
+	if hostname != "" {
+		// nolint
+		ctx = context.WithValue(ctx, system.DeviceNameCtxKey, hostname)
+	}
+
+	config, _, err := s.getConfig(activeProf)
+	if err != nil {
+		log.Errorf("failed to get active profile config: %v", err)
+		return nil, nil, fmt.Errorf("failed to get active profile config: %w", err)
+	}
+
+	s.mutex.Lock()
+	s.config = config
+	s.mutex.Unlock()
+
+	return ctx, activeProf, nil
+}
+
 // Login uses setup key to prepare configuration for the daemon.
 func (s *Server) SetConfig(callerCtx context.Context, msg *proto.SetConfigRequest) (*proto.SetConfigResponse, error) {
 	s.mutex.Lock()
@@ -546,6 +621,67 @@ func (s *Server) Login(callerCtx context.Context, msg *proto.LoginRequest) (*pro
 	}
 
 	if loginStatus, err := s.loginAttempt(ctx, msg.SetupKey, ""); err != nil {
+		state.Set(loginStatus)
+		return nil, err
+	}
+
+	return &proto.LoginResponse{}, nil
+}
+
+// LoginWithJWTToken uses a JWT token to prepare configuration for the daemon without interactive SSO flow.
+func (s *Server) LoginWithJWTToken(callerCtx context.Context, msg *proto.LoginWithJWTTokenRequest) (*proto.LoginResponse, error) {
+	if err := restoreResidualState(s.rootCtx, s.profileManager.GetStatePath()); err != nil {
+		log.Warnf(errRestoreResidualState, err)
+	}
+
+	state := internal.CtxGetState(s.rootCtx)
+	defer func() {
+		status, err := state.Status()
+		if err != nil || (status != internal.StatusNeedsLogin && status != internal.StatusLoginFailed) {
+			state.Set(internal.StatusIdle)
+		}
+	}()
+
+	if msg.JwtToken == "" {
+		state.Set(internal.StatusLoginFailed)
+		return nil, gstatus.Errorf(codes.InvalidArgument, "jwt token is required")
+	}
+
+	ctx, _, err := s.prepareLoginContext(callerCtx, msg.ProfileName, msg.Username, msg.Hostname)
+	if err != nil {
+		state.Set(internal.StatusLoginFailed)
+		return nil, err
+	}
+
+	if msg.ManagementUrl != "" || msg.AdminURL != "" {
+		update := profilemanager.ConfigInput{}
+		if msg.ManagementUrl != "" {
+			update.ManagementURL = msg.ManagementUrl
+		}
+		if msg.AdminURL != "" {
+			update.AdminURL = msg.AdminURL
+		}
+
+		updatedConfig, err := profilemanager.UpdateConfig(update)
+		if err != nil {
+			state.Set(internal.StatusLoginFailed)
+			log.Errorf("failed to update profile config for jwt login: %v", err)
+			return nil, fmt.Errorf("failed to update profile config: %w", err)
+		}
+
+		s.mutex.Lock()
+		s.config = updatedConfig
+		s.mutex.Unlock()
+	}
+
+	if _, err := s.loginAttempt(ctx, "", ""); err == nil {
+		state.Set(internal.StatusIdle)
+		return &proto.LoginResponse{}, nil
+	}
+
+	state.Set(internal.StatusConnecting)
+
+	if loginStatus, err := s.loginAttempt(ctx, "", msg.JwtToken); err != nil {
 		state.Set(loginStatus)
 		return nil, err
 	}

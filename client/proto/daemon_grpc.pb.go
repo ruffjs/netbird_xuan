@@ -20,6 +20,8 @@ const _ = grpc.SupportPackageIsVersion7
 type DaemonServiceClient interface {
 	// Login uses setup key to prepare configuration for the daemon.
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
+	// LoginWithJWTToken uses a user JWT token to register/login directly without SSO browser flow.
+	LoginWithJWTToken(ctx context.Context, in *LoginWithJWTTokenRequest, opts ...grpc.CallOption) (*LoginResponse, error)
 	// WaitSSOLogin uses the userCode to validate the TokenInfo and
 	// waits for the user to continue with the login on a browser
 	WaitSSOLogin(ctx context.Context, in *WaitSSOLoginRequest, opts ...grpc.CallOption) (*WaitSSOLoginResponse, error)
@@ -94,6 +96,15 @@ func NewDaemonServiceClient(cc grpc.ClientConnInterface) DaemonServiceClient {
 func (c *daemonServiceClient) Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error) {
 	out := new(LoginResponse)
 	err := c.cc.Invoke(ctx, "/daemon.DaemonService/Login", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *daemonServiceClient) LoginWithJWTToken(ctx context.Context, in *LoginWithJWTTokenRequest, opts ...grpc.CallOption) (*LoginResponse, error) {
+	out := new(LoginResponse)
+	err := c.cc.Invoke(ctx, "/daemon.DaemonService/LoginWithJWTToken", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -476,6 +487,8 @@ func (x *daemonServiceExposeServiceClient) Recv() (*ExposeServiceEvent, error) {
 type DaemonServiceServer interface {
 	// Login uses setup key to prepare configuration for the daemon.
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
+	// LoginWithJWTToken uses a user JWT token to register/login directly without SSO browser flow.
+	LoginWithJWTToken(context.Context, *LoginWithJWTTokenRequest) (*LoginResponse, error)
 	// WaitSSOLogin uses the userCode to validate the TokenInfo and
 	// waits for the user to continue with the login on a browser
 	WaitSSOLogin(context.Context, *WaitSSOLoginRequest) (*WaitSSOLoginResponse, error)
@@ -546,6 +559,9 @@ type UnimplementedDaemonServiceServer struct {
 
 func (UnimplementedDaemonServiceServer) Login(context.Context, *LoginRequest) (*LoginResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Login not implemented")
+}
+func (UnimplementedDaemonServiceServer) LoginWithJWTToken(context.Context, *LoginWithJWTTokenRequest) (*LoginResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LoginWithJWTToken not implemented")
 }
 func (UnimplementedDaemonServiceServer) WaitSSOLogin(context.Context, *WaitSSOLoginRequest) (*WaitSSOLoginResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WaitSSOLogin not implemented")
@@ -682,6 +698,24 @@ func _DaemonService_Login_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DaemonServiceServer).Login(ctx, req.(*LoginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DaemonService_LoginWithJWTToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LoginWithJWTTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DaemonServiceServer).LoginWithJWTToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/daemon.DaemonService/LoginWithJWTToken",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DaemonServiceServer).LoginWithJWTToken(ctx, req.(*LoginWithJWTTokenRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1350,6 +1384,10 @@ var DaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Login",
 			Handler:    _DaemonService_Login_Handler,
+		},
+		{
+			MethodName: "LoginWithJWTToken",
+			Handler:    _DaemonService_LoginWithJWTToken_Handler,
 		},
 		{
 			MethodName: "WaitSSOLogin",
