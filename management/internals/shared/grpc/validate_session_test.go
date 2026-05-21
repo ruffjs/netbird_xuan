@@ -322,21 +322,29 @@ func (m *testValidateSessionServiceManager) GetServiceByDomain(ctx context.Conte
 	return m.store.GetServiceByDomain(ctx, domain)
 }
 
-func (m *testValidateSessionServiceManager) GetActiveClusters(_ context.Context, _, _ string) ([]proxy.Cluster, error) {
+func (m *testValidateSessionServiceManager) GetClusters(_ context.Context, _, _ string) ([]proxy.Cluster, error) {
 	return nil, nil
+}
+
+func (m *testValidateSessionServiceManager) DeleteAccountCluster(_ context.Context, _, _, _ string) error {
+	return nil
 }
 
 type testValidateSessionProxyManager struct{}
 
-func (m *testValidateSessionProxyManager) Connect(_ context.Context, _, _, _ string, _ *string, _ *proxy.Capabilities) error {
+func (m *testValidateSessionProxyManager) Connect(_ context.Context, _, _, _, _ string, _ *string, _ *proxy.Capabilities) (*proxy.Proxy, error) {
+	return nil, nil
+}
+
+func (m *testValidateSessionProxyManager) Disconnect(_ context.Context, _, _ string) error {
 	return nil
 }
 
-func (m *testValidateSessionProxyManager) Disconnect(_ context.Context, _ string) error {
+func (m *testValidateSessionProxyManager) Heartbeat(_ context.Context, _ *proxy.Proxy) error {
 	return nil
 }
 
-func (m *testValidateSessionProxyManager) Heartbeat(_ context.Context, _, _, _ string) error {
+func (m *testValidateSessionProxyManager) DeleteAccountCluster(_ context.Context, _, _ string) error {
 	return nil
 }
 
