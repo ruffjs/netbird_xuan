@@ -29,6 +29,13 @@ var (
 	binaryExtensions = []string{"pkg"}
 )
 
+func resolveTempDir() string {
+	if stateDir := os.Getenv("NB_STATE_DIR"); stateDir != "" {
+		return filepath.Join(stateDir, "tmp-install")
+	}
+	return defaultTempDir
+}
+
 // Setup runs the installer with appropriate arguments and manages the daemon/UI state
 // This will be run by the updater process
 func (u *Installer) Setup(ctx context.Context, dryRun bool, installerFile string, daemonFolder string) (resultErr error) {

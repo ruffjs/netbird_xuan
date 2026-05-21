@@ -27,7 +27,7 @@ type Installer struct {
 // New used by the service
 func New() *Installer {
 	return &Installer{
-		tempDir: defaultTempDir,
+		tempDir: resolveTempDir(),
 	}
 }
 
