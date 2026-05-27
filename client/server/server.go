@@ -331,7 +331,7 @@ func (s *Server) prepareLoginContext(callerCtx context.Context, profileName, use
 			profileUsername = *username
 		}
 
-		if *profileName != activeProf.Name && profileUsername != activeProf.Username {
+		if *profileName != activeProf.Name || profileUsername != activeProf.Username {
 			if s.checkProfilesDisabled() {
 				log.Errorf("profiles are disabled, you cannot use this feature without profiles enabled")
 				return nil, nil, gstatus.Errorf(codes.Unavailable, errProfilesDisabled)
@@ -663,14 +663,22 @@ func (s *Server) LoginWithJWTToken(callerCtx context.Context, msg *proto.LoginWi
 		return nil, gstatus.Errorf(codes.InvalidArgument, "jwt token is required")
 	}
 
-	ctx, _, err := s.prepareLoginContext(callerCtx, msg.ProfileName, msg.Username, msg.Hostname)
+	ctx, activeProf, err := s.prepareLoginContext(callerCtx, msg.ProfileName, msg.Username, msg.Hostname)
 	if err != nil {
 		state.Set(internal.StatusLoginFailed)
 		return nil, err
 	}
 
 	if msg.ManagementUrl != "" || msg.AdminURL != "" {
+		cfgPath, err := activeProf.FilePath()
+		if err != nil {
+			state.Set(internal.StatusLoginFailed)
+			log.Errorf("failed to get active profile file path: %v", err)
+			return nil, fmt.Errorf("failed to get active profile file path: %w", err)
+		}
+
 		update := profilemanager.ConfigInput{}
+		update.ConfigPath = cfgPath
 		if msg.ManagementUrl != "" {
 			update.ManagementURL = msg.ManagementUrl
 		}

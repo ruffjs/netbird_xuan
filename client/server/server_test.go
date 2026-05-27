@@ -182,6 +182,159 @@ func TestServer_Up(t *testing.T) {
 	assert.Contains(t, err.Error(), "context deadline exceeded")
 }
 
+func TestServer_LoginWithJWTToken_PersistsProfileURLs(t *testing.T) {
+	tempDir := t.TempDir()
+	origDefaultProfileDir := profilemanager.DefaultConfigPathDir
+	origDefaultConfigPath := profilemanager.DefaultConfigPath
+	origActiveProfileStatePath := profilemanager.ActiveProfileStatePath
+	origConfigDirOverride := profilemanager.ConfigDirOverride
+
+	profilemanager.ConfigDirOverride = tempDir
+	profilemanager.DefaultConfigPathDir = tempDir
+	profilemanager.ActiveProfileStatePath = filepath.Join(tempDir, "active_profile.json")
+	profilemanager.DefaultConfigPath = filepath.Join(tempDir, "default.json")
+	t.Cleanup(func() {
+		profilemanager.DefaultConfigPathDir = origDefaultProfileDir
+		profilemanager.ActiveProfileStatePath = origActiveProfileStatePath
+		profilemanager.DefaultConfigPath = origDefaultConfigPath
+		profilemanager.ConfigDirOverride = origConfigDirOverride
+	})
+
+	ctx := internal.CtxInitState(context.Background())
+
+	currUser, err := user.Current()
+	require.NoError(t, err)
+
+	profileName := "jwt-profile"
+	activeProf := &profilemanager.ActiveProfileState{
+		Name:     profileName,
+		Username: currUser.Username,
+	}
+
+	pm := profilemanager.ServiceManager{}
+	err = pm.SetActiveProfileState(activeProf)
+	require.NoError(t, err)
+
+	cfgPath, err := activeProf.FilePath()
+	require.NoError(t, err)
+
+	_, err = profilemanager.UpdateOrCreateConfig(profilemanager.ConfigInput{
+		ConfigPath:    cfgPath,
+		ManagementURL: "https://api.netbird.io:443",
+		AdminURL:      "https://app.netbird.io:443",
+	})
+	require.NoError(t, err)
+
+	s := New(ctx, "console", "", false, false, false, false)
+
+	loginCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+
+	_, err = s.LoginWithJWTToken(loginCtx, &daemonProto.LoginWithJWTTokenRequest{
+		JwtToken:      "invalid-jwt-token",
+		ProfileName:   &profileName,
+		Username:      &currUser.Username,
+		ManagementUrl: "http://non-existent-url-for-testing.invalid:12345",
+		AdminURL:      "https://admin.example.com",
+	})
+	require.Error(t, err)
+
+	cfg, err := profilemanager.GetConfig(cfgPath)
+	require.NoError(t, err)
+	require.Equal(t, "http://non-existent-url-for-testing.invalid:12345", cfg.ManagementURL.String())
+	require.Equal(t, "https://admin.example.com:443", cfg.AdminURL.String())
+}
+
+func TestServer_PrepareLoginContext_SwitchesProfileWhenProfileOrUsernameDiffers(t *testing.T) {
+	tempDir := t.TempDir()
+	origDefaultProfileDir := profilemanager.DefaultConfigPathDir
+	origDefaultConfigPath := profilemanager.DefaultConfigPath
+	origActiveProfileStatePath := profilemanager.ActiveProfileStatePath
+	origConfigDirOverride := profilemanager.ConfigDirOverride
+
+	profilemanager.ConfigDirOverride = tempDir
+	profilemanager.DefaultConfigPathDir = tempDir
+	profilemanager.ActiveProfileStatePath = filepath.Join(tempDir, "active_profile.json")
+	profilemanager.DefaultConfigPath = filepath.Join(tempDir, "default.json")
+	t.Cleanup(func() {
+		profilemanager.DefaultConfigPathDir = origDefaultProfileDir
+		profilemanager.ActiveProfileStatePath = origActiveProfileStatePath
+		profilemanager.DefaultConfigPath = origDefaultConfigPath
+		profilemanager.ConfigDirOverride = origConfigDirOverride
+	})
+
+	ctx := internal.CtxInitState(context.Background())
+	currUser, err := user.Current()
+	require.NoError(t, err)
+
+	pm := profilemanager.ServiceManager{}
+	err = pm.SetActiveProfileState(&profilemanager.ActiveProfileState{
+		Name:     "alpha",
+		Username: currUser.Username,
+	})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name            string
+		startProfile    string
+		startUsername   string
+		targetProfile   string
+		targetUsername  string
+		expectedProfile string
+		expectedUser    string
+	}{
+		{
+			name:            "switch when profile changes but username stays same",
+			startProfile:    "alpha",
+			startUsername:   currUser.Username,
+			targetProfile:   "beta",
+			targetUsername:  currUser.Username,
+			expectedProfile: "beta",
+			expectedUser:    currUser.Username,
+		},
+		{
+			name:            "switch when username changes but profile stays same",
+			startProfile:    "beta",
+			startUsername:   currUser.Username,
+			targetProfile:   "beta",
+			targetUsername:  currUser.Username + "_other",
+			expectedProfile: "beta",
+			expectedUser:    currUser.Username + "_other",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := pm.SetActiveProfileState(&profilemanager.ActiveProfileState{
+				Name:     tc.startProfile,
+				Username: tc.startUsername,
+			})
+			require.NoError(t, err)
+
+			activeProf := &profilemanager.ActiveProfileState{
+				Name:     tc.targetProfile,
+				Username: tc.targetUsername,
+			}
+			cfgPath, err := activeProf.FilePath()
+			require.NoError(t, err)
+
+			_, err = profilemanager.UpdateOrCreateConfig(profilemanager.ConfigInput{
+				ConfigPath: cfgPath,
+			})
+			require.NoError(t, err)
+
+			s := New(ctx, "console", "", false, false, false, false)
+			_, gotProf, err := s.prepareLoginContext(ctx, &tc.targetProfile, &tc.targetUsername, "")
+			require.NoError(t, err)
+			require.Equal(t, tc.expectedProfile, gotProf.Name)
+			require.Equal(t, tc.expectedUser, gotProf.Username)
+
+			storedProf, err := pm.GetActiveProfileState()
+			require.NoError(t, err)
+			require.Equal(t, tc.expectedProfile, storedProf.Name)
+			require.Equal(t, tc.expectedUser, storedProf.Username)
+		})
+	}
+}
+
 type mockSubscribeEventsServer struct {
 	ctx        context.Context
 	sentEvents []*daemonProto.SystemEvent
